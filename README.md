@@ -22,3 +22,6 @@ post](https://cbelanger.netlify.app/post/pardon-me-analyzing-trump-s-presidentia
 
 For more about dynamic API interception, [check out this blog
 post](https://cbelanger.netlify.app/post/scraping-dynamic-web-sites-with-api-interception/).
+
+If you have any questions you can email me at
+<christopher.a.belanger@gmail.com>.
