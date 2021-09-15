@@ -1,0 +1,408 @@
+---
+title: "Scraping Data from the Web with R"
+author:
+- affiliation: group1
+  name: Christopher Belanger, PhD<br>christopher.a.belanger@gmail.com<br>*Data Scientist, Ottawa Neighbourhood Study*<br>*Managing Partner, Belanger Analytics Inc.*
+date: "September 15, 2021"
+output: ioslides_presentation
+bibliography: bibliography.bib
+---
+
+```{r setup, include=FALSE}
+# RESPONSE
+# https://directpoll.com/r?XDbzPBd3ixYqg8Bd7sSWSmredG9UwHgZFf6XyVx
+# CONFIG
+# https://www.directpoll.com/c?XDVhEtj6SDt3IPhZgJ6LU2E2ajFgEa#opt0
+# PARTICIPANT
+# http://etc.ch/taPr
+
+
+library(tidyverse)
+library(leaflet)
+library(mapdeck)
+
+### NOTE!
+# to make the heat plot map you need a mapbox api key, they're free
+key <- read_file("../../chris_google_api/chris_mapbox_api_key.csv")   
+
+knitr::opts_chunk$set(echo = FALSE)
+
+scrape_foodland <- function() {
+ # message("Starting Foodland")
+  url <- "https://foodland.ca/store-locator/"
+  
+  r <- rvest::read_html(url)
+  
+  stores <- r %>%
+    rvest::html_elements(css = ".brand-foodland-store-location")
+  
+  # port aux choix doesn't have an address, only a postal code, and is left out
+  results <- purrr::map_df(stores, function(store) {
+    lons <- lats <- ids <- addresses <- cities <- provinces <- postcodes <- NA
+    lons <- rvest::html_attr(store, "data-lng")
+    lats <- rvest::html_attr(store, "data-lat")
+    ids <- rvest::html_attr(store, "data-id")
+    
+    # using tryCatch() so it doesn't fail if anything isn't found
+    tryCatch(   expr = {addresses <- rvest::html_elements(store, css = ".location_address_address_1") %>% rvest::html_text()},
+                error = function(e) message(e))
+    
+    cities <- rvest::html_elements(store, css = ".city") %>% rvest::html_text()
+    provinces <- rvest::html_elements(store, css = ".province") %>% rvest::html_text()
+    postcodes <- rvest::html_elements(store, css = ".postal_code") %>% rvest::html_text()
+    names <- rvest::html_elements(store, css = ".name") %>% rvest::html_text()
+    
+    phones <- NA
+    tryCatch(   expr = { phones <- rvest::html_elements(store, css = ".phone") %>% rvest::html_text() },
+                error = function(e) message(e) )
+    
+    # return our results in a nicely formatted tibble
+    tibble(id = ids,
+           name = names,
+           address = addresses,
+           city = cities,
+           province = provinces,
+           postal_code = postcodes,
+           phone = phones,
+           lon = lons,
+           lat = lats)   
+  })
+  
+  return (results)
+}
+```
+
+## Howdy!
+
+<center>![A picture of Chris.](../data/chris.jpg)</center>
+<h3>Christopher Belanger, PhD</h3>
+<b>Data Scientist</b>, Ottawa Neighbourhood Study<br>
+<b>Managing Partner</b>, Belanger Analytics
+
+* Email: christopher.a.belanger@gmail.com
+* Blog: https://cbelanger.netlify.app
+* GitHub: https://github.com/chris31415926535/
+* LinkedIn: https://www.linkedin.com/in/christopherabelanger/
+
+## Outline
+
+* Poll: Getting to Know You
+* What is data scraping?
+* Why use R to scrape data?
+* Example 1: Scraping static websites with HTML/CSS.
+* Example 2: Scraping dynamic websites with API interception.
+
+
+## Getting to Know You
+
+<center><large>http://etc.ch/taPr</large></center>
+
+```{r direct_poll}
+knitr::include_url("https://directpoll.com/r?XDbzPBd3ixYqg8Bd7sSWSmredG9UwHgZFf6XyVx")
+```
+
+
+## What is Data Scraping?
+
+Scraping data means **transforming human-readable data into machine-readable data.**
+
+We scrape data when:
+
+* The data is available online; and,
+* We want to work with it; but,
+* It's in an inconvenient format.
+
+We could also think of it as *the creative acquisition of machine-readable data.*
+
+## Why Use R for Data Scraping?
+
+1. **A robust toolkit.** 
+    * There are many great R packages that make scraping relatively easy and painless.
+1. **Code-based power, repeatability, and flexibility.**
+    * A code-based approach gives you precise control, lets you re-run or re-purpose analyses as needed.
+1. **A single environment.** 
+    * Scrape your data and then analyse it from the comfort of a single RStudio session.
+
+## Use Case: Mapping Ottawa's Food Environment
+
+* Research suggests that access to healthy food is an important factor in public health.
+* To better understand any inequities and access issues in Ottawa, the Ottawa Neighbourhood Study is taking an inventory of Ottawa's food environment.
+* This means finding every grocery store, restaurant, convenience store, bakery...
+
+**This is a perfect use-case for data scraping.**
+
+
+
+```{r, eval = FALSE, echo = FALSE}
+# [@larson_neighborhood_2009; @hilmers_neighborhood_2012; @haynes-maslow_examining_2017; @gregg_understanding_2017]
+```
+
+
+## Case 1: Static HTML/CSS
+
+A **static website** is a collection of html (and other) files that you download from a server and view in your browser.
+
+* It's the *files themselves* that are static: everyone who visits gets the same files.
+* But static websites can still be interactive!
+
+## Case 1: Static HTML/CSS: The Basic Recipe
+
+Because the data is all contained in static files, scraping a static website generally follows this recipe:
+
+1. **Download the site's html** in R with `rvest::read_html()`.
+1. **Find the CSS selectors you need** using your browser and SelectorGadget.
+1. **Find any html attributes you need** by viewing the source html in your browser.
+1. **Extract the data in R** using `rvest::html_elements()` and `rvest::html_attrs()`.
+
+In practice, of course, the steps don't usually go in this nice order :)
+
+## Case 1: Static HTML/CSS: Foodland
+
+To find all Foodland locations, first we use our browser to find the url for [Foodland's store locator page](https://foodland.ca/store-locator/) and use SelectorGadget to find the CSS selector for each store's information.
+
+Then we can read the site in R and get the store data:
+
+```{r foodland_read, echo = TRUE}
+# read website's html
+html <- rvest::read_html("https://foodland.ca/store-locator/")
+# separate out the sections for each store
+stores <- rvest::html_elements(html, css = ".brand-foodland-store-location")
+# isolate the first store for testing
+store <- stores[[1]]
+store
+```
+
+## Case 1: Static HTML/CSS: Scraping Attributes
+
+By inspecting the raw html in our browser with `view-source:`, we find that some data is stored as invisible attributes. We can extract them with `rvest::html_attr()`:
+
+```{r foodland_latlon, echo=TRUE}
+# extract lat/lon coords using html attributes
+lat <- rvest::html_attr(store, "data-lat")
+lon <- rvest::html_attr(store, "data-lng")
+# print to console
+c(lat, lon)
+```
+
+## Case 1: Static HTML/CSS: Scraping Text
+
+Some data is presented only as human-readable text, so we can extract it using CSS selectors that we find again with SelectorGadget.
+
+We use `html_elements()` to get the html snippets for each item, then `html_text()` to get the text.
+
+Here we get the city for the first store:
+
+```{r foodland_city, echo=TRUE}
+city <- rvest::html_elements(store, css = ".city")
+rvest::html_text(city)
+```
+
+## Case 1: Static HTML/CSS: Finishing Up
+
+* We've seen how to get some clean data for one store.
+* The next step is to write code to get all the data for one store.
+* Then, to extract information for all stores, you would iterate over each store:
+  * Either using a `for` loop; or,
+  * Using a vectorized approach with `purrr::map()` or `lapply()`.
+
+**For a complete worked example, see the first example workbook for this talk.**
+
+## Case 1: Foodland's Locations
+
+<center>
+
+```{r foodland_leaflet, message=FALSE, warning = FALSE}
+
+foodland <- scrape_foodland()
+foodland %>% 
+  mutate(
+  lon = as.numeric(lon),
+  lat = as.numeric(lat),
+  address = sprintf("%s, %s, %s %s", address, city, toupper(province), postal_code)
+) %>%
+  leaflet() %>%
+  addTiles() %>%
+  addMarkers(label = ~ address)
+  
+```
+
+</center>
+
+## Case 1: Static HTML/CSS: Tables and Forms
+
+If a website has a table of values, you're in luck:
+
+* `rvest::html_table()` automatically puts tabular data into a structured data frame.
+
+If a website has a form you need to fill and submit, you're not *out* of luck:
+
+* The functions `rvest::html_form*` can help you to fill and submit web forms automatically and read the responses.
+
+## Any Questions So Far?
+
+## Case 2: API Interception: The General Idea
+
+* **Dynamic websites**, for our purposes, are not just static files that your browser displays.
+  * They are more like **computer programs that run in your browser.**
+* As you use a dynamic site, your browser is actively downloading new data in response to your actions.
+* The data comes from API calls.
+* By watching what your browser does, you can find those API calls and make them yourself using R.
+
+
+## Case 2: API Interception: The Recipe
+
+1. Use the Google developer console to monitor Chrome's network activity and find the relevant API call(s).
+2. Reverse-engineer the API calls to find out how to ask for the data you want.
+3. Make the API calls and store the results, using loops or other techniques as appropriate.
+4. Tidy the results.
+
+
+## Case 2: API Interception: Circle K
+
+* We want to find all the Circle K convenience stores in Ottawa.
+* We try [Circle K's store locator](https://www.circlek.com/find-circle-k-convenience-store)...
+* But when we `view-source:` in our browser, the data isn't there!
+* So instead we use the developer console to monitor network traffic...
+  * **And we find an API call that returns the store data!**
+* And we try the API url in our browser...
+  * **And it gives us the same response!**
+  
+**We're ready to pull this data directly into R.**
+
+## Case 2: API Interception: Calling the API
+
+```{r ck_api, echo = TRUE}
+# query the extremely long url for the API call
+url <- "https://www.circlek.com/stores_new.php?lat=45.421&lng=-75.69&services=&region=global&page=0"
+
+resp <- httr::GET(url)
+
+# extract the content from the response, and parse the JSON result
+stores <- httr::content(resp, type = "text/json", encoding = "UTF-8") %>%
+      jsonlite::fromJSON()
+
+# inspect the structure of the response
+str(stores, max.level = 1)
+```
+
+## Case 2: API Interception: Parsing the Response
+
+Parsing complex lists can be a pain, but Circle K's response is easy to tidy:
+
+```{r ck_parse, echo=TRUE}
+# convert the response to a nested data frame, and then unnest the data
+stores$stores %>%
+  enframe() %>%
+  unnest_wider(value) %>%
+  select(display_brand, address, city, latitude, longitude) %>%
+  head(5)
+```
+
+## Case 2: API Interception: Deconstructing the API
+
+For this API, request parameters are sent in the url after `?` and separated by `&`.
+
+https://www.circlek.com/stores_new.php?lat=45.421&lng=-75.69&services=&region=global&page=0
+
+So the parameters here are:
+
+* `lat=45.421`, `lng=-75.69`: The geographic coordinates for the search.
+* `services=`: Blank in this request; maybe to look for specific services?
+* `region=global`: Might let you limit searches; not of interest to us.
+* `page=0`: Aha! This tells the API which page of results to return!
+
+## Case 2: API Interception: Getting the Data
+
+* So to get the data automatically, we can call the API with different values for `page`.
+* Here's a simple example using a `for` loop:
+
+```{r, eval = FALSE, echo = TRUE}
+# set up an empty tibble for our results
+results <- tibble::tibble()
+
+for (page in 0:num_pages){
+  # assume the base url is in a variable called base_url
+  url <- paste0(base_url, page)
+  # call a function to call the API and parse the results
+  result <- call_circlek_api(url)
+  # add the result to our big results table
+  results <- dplyr::bind_rows(results, result)
+}
+```
+
+## Case 2: Circle K's Global Empire
+
+After some (off-screen) data collection, we can plot a heatmap of 9,600 global Circle K locations:
+
+<center>
+
+```{r ck_heatmap, message = FALSE, warning = FALSE}
+
+# some data errors to be fixed..
+ck <- read_csv("../data/circle_k_global.csv") %>%
+  select(lat = latitude,
+         lng = longitude) %>%
+  mutate(lat = if_else(lat > 1000 | lat < -1000, lat / 10^7, lat),
+         lng = if_else(lng > 1000 | lng < -1000, lng / 10^7, lng)) %>%
+  drop_na()
+
+# make a heat map using mapdeck
+mapdeck(token = key, style = mapdeck_style('light'), #('dark'),
+        location = c(-50, 52), zoom = 1) %>%
+  mapdeck::add_heatmap(data = ck,
+                      # intensity = 2,
+                       update_view = FALSE) %>%
+  mapdeck::add_title("Heatmap of n=9,599 Circle K Locations")
+
+# can also do a 3d hexagon map which is pretty cool
+# mapdeck(token = key, style = mapdeck_style('light'), #('dark'),
+#         location = c(-50, 52), zoom = 1) %>%
+#   mapdeck::add_hexagon(data = ck,
+#                        radius = 1000,
+#                        elevation_scale = 10,
+#                       # intensity = 2,
+#                        update_view = FALSE)
+
+
+```
+
+</center>
+
+## Closing Considerations: Etiquette
+
+In closing, a few suggestions for web-scraping etiquette:
+
+* Please don't overwhelm web servers: space out requests using `Sys.sleep()`.
+  * *some sites will block your IP if you make too many requests too quickly.*
+* Please don't scrape more than you really need.
+  * *Traffic costs add up.*
+* Scraping password-protected data might not be a good idea.
+  * *Yes, you might have access, but what are the terms of use?*
+
+  
+## Thanks! Questions?
+
+<center>![A picture of Chris.](../data/chris.jpg)</center>
+<h3>Christopher Belanger, PhD</h3>
+<b>Data Scientist</b>, Ottawa Neighbourhood Study<br>
+<b>Managing Partner</b>, Belanger Analytics
+
+* Email: christopher.a.belanger@gmail.com
+* Blog: https://cbelanger.netlify.app
+* GitHub: https://github.com/chris31415926535/
+* LinkedIn: https://www.linkedin.com/in/christopherabelanger/
+
+## Annex A: Essential Tools
+
+* R Packages:
+  * **httr**: For low-level interaction with websites using functions like `httr::GET()` and `httr::POST()`, and for interpeting their responses with `httr::content()`.
+  * **rvest**: An extremely well-supported package devoted to "harvesting" web data.
+  * **jsonlite**: For parsing API responses in JSON format.
+  * **RSelenium**: For automated browser-based scraping.
+
+* Browser-Based Tools:
+  * **SelectorGadget**: A point-and-click Chrome plug-in for finding CSS selectors.
+  * **Chrome DevTools**: A Chrome tool (Ctrl-Shift-J on Windows) we'll use for monitoring network traffic and API calls.
+  * **Chrome view-source**: An easy way to see a web site's underlying html.
+  
+

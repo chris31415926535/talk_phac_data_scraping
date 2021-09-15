@@ -1,0 +1,156 @@
+---
+title: 'Data Scraping Ex 1: HTML/CSS with Foodland'
+date: "`r Sys.Date()`"
+author: "Christopher Belanger, PhD"
+output:
+  html_document:
+    toc: no
+    toc_float: no
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse)
+library(rvest)
+library(leaflet) # optional
+
+```
+
+
+## Summary
+
+This workbook shows how to scrape data from a simple static HTML/CSS website in R. It is designed to accompany the presentation "Scraping Data from the Web with R."
+
+This document is divided into explanatory text and working "chunks" of code. To run each code chunk, press the green arrow to its right. To run individual lines, move your cursor over them and press `Ctrl-Enter`. Remember, you need to run the chunks in order for them to work.
+
+The first part of the workbook presents a basic walkthrough that uses only base R and the package **rvest**. The second part shows a working function that uses some more advanced concepts, including vectorized functions and error catching, to scrape the entire page into a tidy data set.
+
+## Walkthrough
+
+This is the url we're going to load.
+
+```{r}
+url <- "https://foodland.ca/store-locator/"
+```
+
+First we read the website's html into a variable called `html` and print a summary of it to the console.
+
+```{r}
+html <- rvest::read_html(url)
+
+html
+```
+
+The function `read_html()` returns a special kind of "html_document" object that has a lot of internal structure. We can use functions from **rvest** to interact with it and extract the specific parts we're interested in.
+
+First, we'll extract the html sections for the individual stores using the css selector we found using SelectorGadget.
+
+For this demonstration, put the first store into a separate variable and print summary results to the console.
+
+```{r}
+stores <- rvest::html_elements(html, css = ".brand-foodland-store-location")
+
+store <- stores[[1]]
+
+store
+```
+
+Some data is stored as invisible attributes, which we can extract with html_attr():
+
+```{r}
+rvest::html_attr(store, "data-lat")
+rvest::html_attr(store, "data-lng")
+```
+
+Some data is presented only as human-readable text, so we can extract it using CSS selectors that we find again with SelectorGadget.
+
+We use `html_elements()` to get the html snippets for each item, then `html_text()` to get the text.
+
+here we get the city:
+
+```{r}
+rvest::html_elements(store, css = ".city") %>% rvest::html_text()
+```
+
+and here we get the province:
+
+```{r}
+rvest::html_elements(store, css = ".province") %>% rvest::html_text()
+```
+
+To extract information for all stores, you could iterate over each one using either a `for` loop or a vectorized approach with `purrr::map()` or `lapply()`.
+
+## Complete Function
+
+Here's an example of a complete function for scraping Foodland's location data.
+
+```{r}
+scrape_foodland <- function() {
+  message("Starting Foodland")
+  url <- "https://foodland.ca/store-locator/"
+  
+  r <- rvest::read_html(url)
+  
+  stores <- r %>%
+    rvest::html_elements(css = ".brand-foodland-store-location")
+  
+  # port aux choix doesn't have an address, only a postal code, and is left out
+  results <- purrr::map_df(stores, function(store) {
+    lons <- lats <- ids <- addresses <- cities <- provinces <- postcodes <- NA
+    lons <- rvest::html_attr(store, "data-lng")
+    lats <- rvest::html_attr(store, "data-lat")
+    ids <- rvest::html_attr(store, "data-id")
+    
+    # using tryCatch() so it doesn't fail if anything isn't found
+    tryCatch(   expr = {addresses <- rvest::html_elements(store, css = ".location_address_address_1") %>% rvest::html_text()},
+                error = function(e) message(e))
+    
+    cities <- rvest::html_elements(store, css = ".city") %>% rvest::html_text()
+    provinces <- rvest::html_elements(store, css = ".province") %>% rvest::html_text()
+    postcodes <- rvest::html_elements(store, css = ".postal_code") %>% rvest::html_text()
+    names <- rvest::html_elements(store, css = ".name") %>% rvest::html_text()
+    
+    phones <- NA
+    tryCatch(   expr = { phones <- rvest::html_elements(store, css = ".phone") %>% rvest::html_text() },
+                error = function(e) message(e) )
+    
+    # return our results in a nicely formatted tibble
+    tibble(id = ids,
+           name = names,
+           address = addresses,
+           city = cities,
+           province = provinces,
+           postal_code = postcodes,
+           phone = phones,
+           lon = lons,
+           lat = lats)   
+  })
+  
+  return (results)
+}
+
+```
+
+And here we can see the results:
+
+```{r}
+foodland <- scrape_foodland()
+
+foodland
+```
+
+As one final example, look how easy it is to make this data into an interactive map:
+
+```{r}
+foodland %>% 
+  mutate(
+  lon = as.numeric(lon),
+  lat = as.numeric(lat),
+  address = sprintf("%s, %s, %s %s", address, city, toupper(province), postal_code)
+) %>%
+  leaflet::leaflet() %>%
+  leaflet::addTiles() %>%
+  leaflet::addMarkers(label = ~ address)
+  
+```
+
